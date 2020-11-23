@@ -66,6 +66,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         }
 
         persist_wifi_config(&wifi_config);
+        isWifiConfigurated = true;
 
         ESP_ERROR_CHECK( esp_wifi_disconnect() );
         ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
