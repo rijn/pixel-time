@@ -399,10 +399,37 @@ void set_address_and_latch(void) {
 
   // set latch
   display_row_t *last_row = matrix_row_framebuffer_malloc[ROWS_PER_FRAME - 1];
-  last_row->xlat_bits[0] = 0x00 | BIT_XLAT;
-  last_row->xlat_bits[1] = 0x00 | BIT_XLAT;
+  last_row->xlat_bits[0] = BIT_XLAT;
+  last_row->xlat_bits[1] = 0x00;
   last_row->xlat_bits[2] = 0x00;
   last_row->xlat_bits[3] = 0x00;
+}
+
+void fill_white_color(uint16_t brightness) {
+  display_pixel_t sample_pixel;
+
+  for (uint8_t channel = 0; channel < COLOR_CHANNELS_PER_PIXEL; channel++)
+    for (uint8_t offset = 0; offset < PIXEL_COLOR_DEPTH_BITS; offset++)
+      // Send MSB first
+      sample_pixel.data[channel * PIXEL_COLOR_DEPTH_BITS +
+                        (PIXEL_COLOR_DEPTH_BITS - 1 - offset)] =
+          (brightness >> offset) & BIT_DATA;
+
+  for (uint8_t matrix_frame_parallel_row = 0;
+       matrix_frame_parallel_row < ROWS_PER_FRAME;
+       matrix_frame_parallel_row++) {
+    display_row_t *fb_row_malloc_ptr = (display_row_t *)
+        matrix_row_framebuffer_malloc[matrix_frame_parallel_row];
+    for (uint8_t pixel = 0; pixel < PIXELS_PER_ROW; pixel++) {
+      display_pixel_t *pixel_malloc_ptr =
+          (display_pixel_t *)&fb_row_malloc_ptr->pixels[pixel];
+      for (uint8_t offset = 0;
+           offset < COLOR_CHANNELS_PER_PIXEL * PIXEL_COLOR_DEPTH_BITS;
+           offset++) {
+        pixel_malloc_ptr->data[offset] = sample_pixel.data[offset];
+      }
+    }
+  }
 }
 
 bool initialize_display(void) {
@@ -411,6 +438,8 @@ bool initialize_display(void) {
 
   clear_buffer();
   set_address_and_latch();
+
+  fill_white_color(4095);
 
   return true;
 }

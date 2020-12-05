@@ -2,7 +2,7 @@
 
 #define ESP32_I2S_DMA_MODE I2S_PARALLEL_BITS_8
 #define ESP32_I2S_DMA_STORAGE_TYPE uint8_t
-#define ESP32_I2S_CLOCK_SPEED (1000000UL) // @ 10Mhz
+#define ESP32_I2S_CLOCK_SPEED (1000000UL) // @ 1Mhz
 #define CLKS_DURING_LATCH 0               // Not used.
 
 #define DATA_PIN 12
