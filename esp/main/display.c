@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "esp32_i2s_parallel.h"
+#include "esp32_i2s_parallel_v2.h"
 #include "esp_heap_caps.h"
 
 #include "display.h"
@@ -89,71 +89,7 @@ bool allocate_dma_memory(void) {
 
   _total_dma_capable_memory_reserved += _frame_buffer_memory_required;
 
-  // Step 2: Calculate the amount of memory required for the DMA engine's linked
-  // list descriptors. Credit to SmartMatrix for this stuff.
-
-  // // Calculate what colour depth is actually possible based on memory
-  // available
-  // // vs. required dma linked-list descriptors. aka. Calculate the lowest
-  // // LSBMSB_TRANSITION_BIT value that will fit in memory
-  int num_dma_descriptors_per_row = 0;
-  // lsb_msb_transition_bit = 0;
-
-  // while (1) {
-  //   num_dma_descriptors_per_row = 1;
-  //   for (int i = lsb_msb_transition_bit + 1; i < PIXEL_COLOR_DEPTH_BITS; i++)
-  //   {
-  //     num_dma_descriptors_per_row += (1 << (i - lsb_msb_transition_bit - 1));
-  //   }
-
-  //   int ram_required = num_dma_descriptors_per_row * ROWS_PER_FRAME *
-  //                      _num_frame_buffers * sizeof(lldesc_t);
-  //   int largest_block_free =
-  //   heap_caps_get_largest_free_block(MALLOC_CAP_DMA); ESP_LOGI(
-  //       TAG,
-  //       "lsb_msb_transition_bit of %d with %d DMA descriptors per frame row,
-  //       " "requires %d bytes RAM, %d available, leaving %d free: ",
-  //       lsb_msb_transition_bit, num_dma_descriptors_per_row, ram_required,
-  //       largest_block_free, largest_block_free - ram_required);
-
-  //   if (ram_required < largest_block_free)
-  //     break;
-
-  //   if (lsb_msb_transition_bit < PIXEL_COLOR_DEPTH_BITS - 1)
-  //     lsb_msb_transition_bit++;
-  //   else
-  //     break;
-  // }
-
-  // ESP_LOGI(TAG,
-  //          "Raised lsb_msb_transition_bit to %d/%d to fit in remaining RAM",
-  //          lsb_msb_transition_bit, PIXEL_COLOR_DEPTH_BITS - 1);
-
-  /***
-   * Step 2a: lsbMsbTransition bit is now finalised - recalculate the DMA
-   * descriptor count required, which is used for memory allocation of the DMA
-   * linked list memory structure.
-   */
-  num_dma_descriptors_per_row = 1;
-  // for (int i = lsb_msb_transition_bit + 1; i < PIXEL_COLOR_DEPTH_BITS; i++) {
-  //   num_dma_descriptors_per_row += (1 << (i - lsb_msb_transition_bit - 1));
-  // }
-
-  // Refer to 'DMA_LL_PAYLOAD_SPLIT' code in configureDMA() below to understand
-  // why this exists. num_dma_descriptors_per_row is also used to calcaulte
-  // descount which is super important in i2s_parallel_config_t SoC DMA
-  // setup.
-  if (sizeof(display_row_t) > DMA_MAX) {
-    ESP_LOGI(TAG, "Split DMA payload required.");
-    num_dma_descriptors_per_row += PIXEL_COLOR_DEPTH_BITS - 1;
-    // Not if num_dma_descriptors_per_row is even just one descriptor too large,
-    // DMA linked list will not correctly loop.
-  }
-
-  /***
-   * Step 3: Allocate memory for DMA linked list, linking up each framebuffer
-   * row in sequence for GPIO output.
-   */
+  int num_dma_descriptors_per_row = 1;
 
   _dma_linked_list_memory_required = num_dma_descriptors_per_row *
                                      ROWS_PER_FRAME * _num_frame_buffers *
@@ -183,6 +119,7 @@ bool allocate_dma_memory(void) {
   // sizeof(lldesc_t), MALLOC_CAP_DMA);
   dmadesc_a = (lldesc_t *)heap_caps_malloc(desccount * sizeof(lldesc_t),
                                            MALLOC_CAP_DMA);
+  ESP_LOGI(TAG, "desccount = %d", desccount);
   assert("Can't allocate descriptor framebuffer a");
   if (!dmadesc_a) {
     ESP_LOGE(TAG, "ERROR: Could not malloc descriptor framebuffer a.");
@@ -233,8 +170,8 @@ bool configure_dma(void) {
     // Split framebuffer malloc hack 'improvement'
     display_row_t *fb_malloc_ptr = matrix_row_framebuffer_malloc[row];
 
-    ESP_LOGI(TAG, "DMA payload of %d bytes. DMA_MAX is %d.",
-             sizeof(display_row_t), DMA_MAX);
+    ESP_LOGI(TAG, "DMA payload of %d bytes. DMA_MAX is %d. Addr %p",
+             sizeof(display_row_t), DMA_MAX, fb_malloc_ptr);
 
     // first set of data is LSB through MSB, single pass (IF TOTAL SIZE <
     // DMA_MAX) - all color bits are displayed once, which takes care of
@@ -242,15 +179,15 @@ bool configure_dma(void) {
     // less than DMA_MAX - worst case for library: 16-bpp with 256 pixels per
     // row would exceed this, need to break into two
     link_dma_desc(&dmadesc_a[current_dmadescriptor_offset], previous_dmadesc_a,
-                  &(fb_malloc_ptr[0].pixels[0].data), sizeof(display_row_t));
+                  fb_malloc_ptr, sizeof(display_row_t));
     previous_dmadesc_a = &dmadesc_a[current_dmadescriptor_offset];
 
-    if (double_buffering_enabled) {
-      link_dma_desc(&dmadesc_b[current_dmadescriptor_offset],
-                    previous_dmadesc_b, &(fb_malloc_ptr[1].pixels[0].data),
-                    sizeof(display_row_t));
-      previous_dmadesc_b = &dmadesc_b[current_dmadescriptor_offset];
-    }
+    // if (double_buffering_enabled) {
+    //   link_dma_desc(&dmadesc_b[current_dmadescriptor_offset],
+    //                 previous_dmadesc_b, &(fb_malloc_ptr[1].pixels[0].data),
+    //                 sizeof(display_row_t));
+    //   previous_dmadesc_b = &dmadesc_b[current_dmadescriptor_offset];
+    // }
 
     current_dmadescriptor_offset++;
 
@@ -270,13 +207,13 @@ bool configure_dma(void) {
         // TODO: size must be less than DMA_MAX - worst case for library: 16 -
         // bpp with 256 pixels per row would exceed this, need to break into two
         link_dma_desc(&dmadesc_a[current_dmadescriptor_offset],
-                      previous_dmadesc_a, &(fb_malloc_ptr[0].pixels[cd].data),
+                      previous_dmadesc_a, fb_malloc_ptr,
                       sizeof(display_pixel_t));
         previous_dmadesc_a = &dmadesc_a[current_dmadescriptor_offset];
 
         if (double_buffering_enabled) {
           link_dma_desc(&dmadesc_b[current_dmadescriptor_offset],
-                        previous_dmadesc_b, &(fb_malloc_ptr[1].pixels[cd].data),
+                        previous_dmadesc_b, fb_malloc_ptr,
                         sizeof(display_pixel_t));
           previous_dmadesc_b = &dmadesc_b[current_dmadescriptor_offset];
         }
@@ -356,25 +293,44 @@ bool configure_dma(void) {
   */
   // ESP_LOGI(TAG,"Performing I2S setup.\n");
 
-  i2s_parallel_config_t cfg = {
-      .gpio_bus = {DATA_PIN, -1, XLAT_PIN, BLANK_PIN, ADDR1_PIN, ADDR2_PIN,
-                   ADDR3_PIN, -1},
-      .gpio_clk = SCLK_PIN,
-      .clkspeed_hz =
-          ESP32_I2S_CLOCK_SPEED,  // ESP32_I2S_CLOCK_SPEED,  // formula used is
-                                  // 80000000L/(cfg->clkspeed_hz + 1), must
-                                  // result in >=2.  Acceptable
-                                  // values 26.67MHz, 20MHz, 16MHz, 13.34MHz...
-      .bits = ESP32_I2S_DMA_MODE, // ESP32_I2S_DMA_MODE,
-      .bufa = 0,
-      .bufb = 0,
-      desccount,
-      desccount,
-      dmadesc_a,
-      dmadesc_b};
+  // i2s_parallel_config_t cfg = {
+  //     .gpio_bus = {DATA_PIN, -1, XLAT_PIN, BLANK_PIN, ADDR1_PIN, ADDR2_PIN,
+  //                  ADDR3_PIN, -1},
+  //     .gpio_clk = SCLK_PIN,
+  //     .clkspeed_hz =
+  //         ESP32_I2S_CLOCK_SPEED,  // ESP32_I2S_CLOCK_SPEED,  // formula used
+  //         is
+  //                                 // 80000000L/(cfg->clkspeed_hz + 1), must
+  //                                 // result in >=2.  Acceptable
+  //                                 // values 26.67MHz, 20MHz,
+  //                                 16MHz, 13.34MHz...
+  //     .bits = ESP32_I2S_DMA_MODE, // ESP32_I2S_DMA_MODE,
+  //     .bufa = 0,
+  //     .bufb = 0,
+  //     desccount,
+  //     desccount,
+  //     dmadesc_a,
+  //     dmadesc_b};
+
+  // // Setup I2S
+  // i2s_parallel_setup_without_malloc(&I2S1, &cfg);
+
+  i2s_parallel_config_t cfg = {.gpio_bus = {DATA_PIN, SCLK_PIN, XLAT_PIN, BLANK_PIN,
+                                            ADDR1_PIN, ADDR2_PIN, ADDR3_PIN,
+                                            -1},
+                               .gpio_clk = -1,
+                               .sample_rate = ESP32_I2S_CLOCK_SPEED,
+                               .sample_width = ESP32_I2S_DMA_MODE,
+                               .desccount_a = desccount,
+                               .lldesc_a = dmadesc_a,
+                               .desccount_b = desccount,
+                               .lldesc_b = dmadesc_b};
 
   // Setup I2S
-  i2s_parallel_setup_without_malloc(&I2S1, &cfg);
+  i2s_parallel_driver_install(I2S_NUM_1, &cfg);
+
+  // Start DMA Output
+  i2s_parallel_send_dma(I2S_NUM_1, &dmadesc_a[0]);
 
   ESP_LOGI(TAG, "configureDMA(): DMA configuration completed on I2S1.");
 
@@ -398,37 +354,98 @@ void set_address_and_latch(void) {
   // TODO: set address pin
 
   // set latch
-  display_row_t *last_row = matrix_row_framebuffer_malloc[ROWS_PER_FRAME - 1];
-  last_row->xlat_bits[0] = BIT_XLAT;
-  last_row->xlat_bits[1] = 0x00;
-  last_row->xlat_bits[2] = 0x00;
-  last_row->xlat_bits[3] = 0x00;
 }
 
-void fill_white_color(uint16_t brightness) {
-  display_pixel_t sample_pixel;
+const uint8_t heart_map[] = {
+    /*Pixel format: Blue: 8 bit, Green: 8 bit, Red: 8 bit, Fix 0xFF: 8 bit, */
+    0x09, 0x04, 0x13, 0xff, 0x32, 0x03, 0xad, 0xff, 0x38, 0x01, 0xcc, 0xff,
+    0x0b, 0x00, 0x26, 0xff, 0x07, 0x01, 0x1a, 0xff, 0x35, 0x00, 0xc1, 0xff,
+    0x35, 0x00, 0xbb, 0xff, 0x07, 0x00, 0x1b, 0xff, 0x84, 0x8a, 0x97, 0xff,
+    0xa5, 0x95, 0xed, 0xff, 0x59, 0x1c, 0xf8, 0xff, 0x31, 0x00, 0xb6, 0xff,
+    0x31, 0x00, 0xb0, 0xff, 0x45, 0x00, 0xf5, 0xff, 0x42, 0x00, 0xf3, 0xff,
+    0x2e, 0x00, 0xa7, 0xff, 0xc4, 0xcb, 0xde, 0xff, 0x9c, 0x81, 0xff, 0xff,
+    0x53, 0x11, 0xfc, 0xff, 0x44, 0x00, 0xff, 0xff, 0x46, 0x00, 0xff, 0xff,
+    0x45, 0x00, 0xfd, 0xff, 0x44, 0x01, 0xfe, 0xff, 0x43, 0x00, 0xef, 0xff,
+    0xa4, 0x90, 0xdb, 0xff, 0x60, 0x27, 0xfe, 0xff, 0x43, 0x00, 0xfd, 0xff,
+    0x46, 0x00, 0xfe, 0xff, 0x47, 0x01, 0xff, 0xff, 0x46, 0x00, 0xfe, 0xff,
+    0x46, 0x00, 0xfe, 0xff, 0x43, 0x00, 0xef, 0xff, 0x58, 0x3a, 0x93, 0xff,
+    0x64, 0x2b, 0xec, 0xff, 0x4b, 0x07, 0xfe, 0xff, 0x48, 0x00, 0xfe, 0xff,
+    0x46, 0x00, 0xfe, 0xff, 0x46, 0x00, 0xfe, 0xff, 0x43, 0x00, 0xf0, 0xff,
+    0x2d, 0x01, 0xa2, 0xff, 0x09, 0x07, 0x0d, 0xff, 0x58, 0x39, 0x94, 0xff,
+    0x50, 0x0f, 0xf4, 0xff, 0x44, 0x01, 0xfe, 0xff, 0x46, 0x00, 0xfe, 0xff,
+    0x44, 0x00, 0xf7, 0xff, 0x2d, 0x00, 0xa3, 0xff, 0x05, 0x00, 0x15, 0xff,
+    0x00, 0x00, 0x00, 0xff, 0x08, 0x02, 0x13, 0xff, 0x30, 0x00, 0xac, 0xff,
+    0x44, 0x00, 0xf7, 0xff, 0x45, 0x01, 0xf8, 0xff, 0x32, 0x00, 0xb8, 0xff,
+    0x08, 0x00, 0x1e, 0xff, 0x00, 0x00, 0x00, 0xff, 0x01, 0x01, 0x01, 0xff,
+    0x00, 0x00, 0x00, 0xff, 0x0a, 0x00, 0x25, 0xff, 0x3a, 0x00, 0xd4, 0xff,
+    0x3e, 0x00, 0xe0, 0xff, 0x0e, 0x00, 0x30, 0xff, 0x00, 0x00, 0x00, 0xff,
+    0x00, 0x00, 0x00, 0xff,
+};
 
-  for (uint8_t channel = 0; channel < COLOR_CHANNELS_PER_PIXEL; channel++)
-    for (uint8_t offset = 0; offset < PIXEL_COLOR_DEPTH_BITS; offset++)
-      // Send MSB first
-      sample_pixel.data[channel * PIXEL_COLOR_DEPTH_BITS +
-                        (PIXEL_COLOR_DEPTH_BITS - 1 - offset)] =
-          (brightness >> offset) & BIT_DATA;
+const uint8_t one_pixel[] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+void fill_white_color(uint16_t brightness) {
+  // display_pixel_t sample_pixel;
+
+  // for (uint8_t channel = 0; channel < COLOR_CHANNELS_PER_PIXEL; channel++)
+  //   for (uint8_t offset = 0; offset < PIXEL_COLOR_DEPTH_BITS; offset++)
+  //     // Send MSB first
+  //     sample_pixel.data[channel * PIXEL_COLOR_DEPTH_BITS +
+  //                       (PIXEL_COLOR_DEPTH_BITS - 1 - offset)] =
+  //         (brightness >> offset) & BIT_DATA;
 
   for (uint8_t matrix_frame_parallel_row = 0;
        matrix_frame_parallel_row < ROWS_PER_FRAME;
        matrix_frame_parallel_row++) {
+
     display_row_t *fb_row_malloc_ptr = (display_row_t *)
         matrix_row_framebuffer_malloc[matrix_frame_parallel_row];
-    for (uint8_t pixel = 0; pixel < PIXELS_PER_ROW; pixel++) {
-      display_pixel_t *pixel_malloc_ptr =
-          (display_pixel_t *)&fb_row_malloc_ptr->pixels[pixel];
-      for (uint8_t offset = 0;
-           offset < COLOR_CHANNELS_PER_PIXEL * PIXEL_COLOR_DEPTH_BITS;
-           offset++) {
-        pixel_malloc_ptr->data[offset] = sample_pixel.data[offset];
+
+    // uint8_t address = (matrix_frame_parallel_row & 0x01) << 6 |
+    // (matrix_frame_parallel_row & 0x02) << 4 | (matrix_frame_parallel_row &
+    // 0x04) << 2;
+    uint8_t address = matrix_frame_parallel_row << 4;
+    memset(fb_row_malloc_ptr, address, sizeof(display_row_t));
+
+    for (uint8_t channel = 0; channel < COLOR_CHANNELS_PER_PIXEL; channel++) {
+      for (uint8_t pixel = 0; pixel < PIXELS_PER_ROW; pixel++) {
+        uint16_t pixel_address = matrix_frame_parallel_row * 8 + pixel;
+
+        display_pixel_t sample_pixel;
+
+        for (uint8_t offset = 0; offset < PIXEL_COLOR_DEPTH_BITS; offset++)
+          // Send MSB first
+          sample_pixel.bits[PIXEL_COLOR_DEPTH_BITS - 1 - offset] =
+              (((uint16_t)one_pixel[pixel_address]) >> offset) & BIT_DATA;
+
+        display_pixel_t *bits_malloc_ptr =
+            (display_pixel_t *)&fb_row_malloc_ptr->channels[channel].pixels[pixel];
+        for (uint8_t offset = 0; offset < PIXEL_COLOR_DEPTH_BITS; offset++) {
+          bits_malloc_ptr->bits[offset * 2] |= sample_pixel.bits[offset];
+          bits_malloc_ptr->bits[offset * 2 + 1] |= sample_pixel.bits[offset] | BIT_SCLK;
+        }
       }
     }
+
+    fb_row_malloc_ptr->xlat_bits[0] |= BIT_XLAT;
+    fb_row_malloc_ptr->xlat_bits[1] |= BIT_XLAT;
+    fb_row_malloc_ptr->xlat_bits[2] |= BIT_XLAT;
+    fb_row_malloc_ptr->xlat_bits[3] |= 0x00;
+    fb_row_malloc_ptr->xlat_bits[4] |= 0x00;
+    fb_row_malloc_ptr->xlat_bits[5] |= 0x00;
+    fb_row_malloc_ptr->xlat_bits[6] |= 0x00;
+    fb_row_malloc_ptr->xlat_bits[7] |= 0x00;
+    fb_row_malloc_ptr->xlat_bits[8] |= 0x00;
+    fb_row_malloc_ptr->xlat_bits[9] |= 0x00;
+    fb_row_malloc_ptr->xlat_bits[10] |= 0x00;
+    fb_row_malloc_ptr->xlat_bits[11] |= 0x00;
   }
 }
 
